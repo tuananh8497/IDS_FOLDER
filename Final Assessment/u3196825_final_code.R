@@ -1,0 +1,332 @@
+# Unit: Introduction to Data Science (11372), Semester 1 2021
+# Author: Tuan Anh (Vincent) Nguyen - u3196825
+# Description: The code for Part B Data Preparation, exploring and modeling 
+#               for final assessment of the unit
+
+# install all packages if it is not installed
+if (!("tidyverse" %in% rownames(installed.packages()))){
+  install.packages("tidyverse")
+  install.packages('plyr')
+  install.packages("ggplot2")
+  install.packages("pander")
+  install.packages("GGally")
+  install.packages("caret")
+}
+# load required library.
+library("tidyverse")
+library(plyr)
+library(dplyr)
+library(readr)
+library(pander)
+library(lubridate)
+library(ggplot2)
+library(caret)
+library(GGally)
+
+# Task 1: Data Preparation and Wrangling
+
+# 1. Load and read the data from the CSV files and store them into dataframes named appropriately.
+Countries <- read_csv("data/Countries.csv")
+df_Countries <- data.frame(Countries)
+
+Covid19 <- read_csv("data/Covid19.csv")
+df_Covid19 <- data.frame(Covid19)
+
+Recovered <- read_csv("data/Recovered.csv") ## need extract attention
+df_Recovered <- data.frame(Recovered)
+
+Tests <- read_csv("data/Tests.csv")
+df_Tests <- data.frame(Tests)
+
+#2. Tidy up the dataframe driven from the file "Recovered.csv" 
+##  to be compatible with the dataframe driven from the file "Covid19.csv", 
+##  i.e. every observation should have a record of recovered patients in one country in a single day.
+df_Recovered <- Recovered %>%
+  gather(key = date, value = recovered, -Country.Region) 
+
+
+#3. Change the column names in the dataframes were loaded from the following files accordingly.
+names(df_Covid19) <- c("Code", "Country", "Continent", "Date", "NewCases", "NewDeaths")
+names(df_Tests)<- c("Code", "Date", "NewTests")
+names(df_Countries) <- c("Code", "Country", "Population", "GDP", "GDPCapita")
+names(df_Recovered) <- c("Country", "Date", "Recovered")
+
+#4. Ensure that all dates variables are of date data type and with the same format across the dataframes.
+# Change date format in df_Recovered
+df_Recovered$Date <- format(as.Date(df_Recovered$Date, format = "%Y.%m.%d"), "%Y-%m-%d")
+
+
+#5. Considering the master datafame is the one loaded from file "Covid19.csv",
+##  add new 5 variables to it from other files (Recovered.csv, Tests.csv, Countries.csv).
+##  The 5 new added variables should be named ("Recovered", "NewTests", "Population", "GDP", "GDPCapita") accordingly.
+##  hint: [Hint: you can use the merge function to facilitate the alignment of the data in the different dataframes.]
+df_Covid19 <- merge(df_Covid19, df_Recovered)
+df_Covid19 <- merge(df_Covid19, df_Tests)
+df_Covid19 <- merge(df_Covid19, df_Countries)
+
+df_master <- df_Covid19 # merged into a master data_frame
+
+#6. Check for Nas in all dataframes and change them to Zero.
+df_master[is.na(df_master)] <- 0
+colSums(is.na(df_master)) # Get the sum of NA values in each table
+
+#7. Using existing "Date" variable; add month and week variables to the master dataframe
+##  [Hint: you may use functions from lubridate package]
+
+df_master <- df_master %>% 
+  mutate(Month = lubridate::month(Date), Week = lubridate::week(Date))
+
+p2_q5_copy_master <- df_master # make a copy of df_master for part 2 question 5.
+
+# PART 2: Exploratory Data Analysis
+##1.Add 4 variables ("CumCases", "CumDeaths", "CumRecovered", "CumTests")
+##  These variables should reflect the cumulative relevant data up to the date
+##  of the observation, i.e. CumCases for country "X" at Date "Y" 
+##  should reflect the total number of cases in country "X" since the beginning of recording data till the date "Y".
+df_master <- df_master %>% 
+  arrange(Country, Date) %>% 
+  group_by(Country) %>% 
+  dplyr::mutate(CumCases = cumsum(NewCases), 
+                CumDeaths = cumsum(NewDeaths), 
+                CumRecovered = cumsum(Recovered),
+                CumTests = cumsum(NewTests))
+
+#2. Add two new variables to the master dataframe ("Active", "FatalityRate")
+##  Active variable should reflect the infected cases that has not been closed yet (by either recovery or death)
+##  and it could be calculated from (CumCases - (CumDeaths + CumRecovered)).
+##  FatalityRate variable should reflect the percentages of death to the infected cases up to date
+##  and it could be calculated from (CumDeaths / CumCases).
+df_master <- df_master %>% 
+  arrange(Country, Date) %>% 
+  group_by(Country) %>% 
+  mutate(Active = CumCases - CumDeaths - CumRecovered, FatalityRate = CumDeaths / CumCases) 
+
+df_master[is.na(df_master)] <- 0 # At this step, Fatality Rate usually contains alot of NaN values. 
+colSums(is.na(df_master))
+
+#3. Add four new variables to the master dataframe ("Cases_1M_Pop", "Deaths_1M_Pop", "Recovered_1M_Pop", "Tests_1M_Pop")
+##  [Hint: Cases_1M_Pop = CumCases*(10^6) / Population)]
+df_master <- df_master %>% 
+  arrange(Country, Date) %>% 
+  group_by(Country) %>% 
+  mutate(Cases_1M_Pop = c(CumCases*(10^6) / Population), 
+         Deaths_1M_Pop = c(CumDeaths*(10^6) / Population),
+         Recovered_1M_Pop = c(CumRecovered*(10^6) / Population),
+         Tests_1M_Pop = c(CumTests*(10^6) / Population))
+
+
+#4. Find the day with the highest reported death toll across the world. Print the date and the death toll of that day.
+highgest_deathtoll_day <- summarise(df_master, date = df_master$Date[which.max(df_master$NewDeaths)],
+                                    max_death = df_master$NewDeaths[which.max(df_master$NewDeaths)])
+
+highgest_deathtoll_day
+
+
+#5. Build a graph to show how the cumulative data of (Infected Cases, Deaths, Recovered, Tests) 
+##  change over the time for the whole world collectively.
+##  HINT: [Hint: Use geom_line, use log for Y axis for better presentation, 
+##          Use different colour to distinguish between new cases, deaths, and recovered]
+q5 <- p2_q5_copy_master %>% 
+  arrange(Date) %>% 
+  mutate(CumCases = cumsum(NewCases), CumDeaths = cumsum(NewDeaths),  CumRecovered = cumsum(Recovered), CumTests = cumsum(NewTests)) %>%
+  select(Country, Date, CumCases, CumDeaths, CumRecovered, CumTests )
+
+q5 %>% 
+  ggplot2::ggplot(aes(x = Date)) +
+  geom_line(mapping = aes(y = CumCases , color = "Confirmed"), size = 2) +
+  geom_line(mapping = aes(y = CumDeaths , color = "Death"), size = 2) +
+  geom_line(mapping = aes(y = CumRecovered , color = "Recovered"), size = 2) +
+  geom_line(mapping = aes(y = CumTests , color = "Tests"), size = 2) +
+  scale_color_manual(values = c(
+    'Confirmed' = 'darkblue',
+    'Death' = 'red',
+    'Recovered' = 'blue',
+    'Tests' = 'green')) +
+  labs(color = 'Type') +
+  ylab("Number of cases") +
+  xlab("Date") +
+  ggtitle("World cumulative data changed over the time of Covid Cases")+
+  theme(legend.position="right")+
+  scale_x_date(date_breaks = "7 days", date_labels = "%m-%d")+
+  scale_y_continuous(trans = 'log10')
+
+#6. Extract the last day (05/05/2020) data and save it in a separate dataframe called "lastDay_data".
+##  HINT: [Hint: use filter function with Date = "2020-05-05"]
+lastDay_data <- df_master %>% 
+  filter(Date == "2020-05-05")
+
+view(lastDay_data)
+
+#7. Based on the last day data, extract the whole records of the top 10 countries worldwide that have current active cases, 
+##  total confirmed cases, and fatality rate in separate dataframes.
+##  (i.e. top10activeW, top10casesW, top10fatalityW, top10testsMW).
+##  [Hint: you can use head(arranged_data, n=10) to get the top 10 records]
+top10activeW <- lastDay_data %>% 
+  arrange(desc(Active)) %>% 
+  head(n=10)
+
+top10casesW <- lastDay_data %>% 
+  arrange(desc(CumCases)) %>% 
+  head(n=10)
+
+top10fatalityW <- lastDay_data %>% 
+  arrange(desc(FatalityRate)) %>% 
+  head(n=10) 
+
+top10testsMW <- lastDay_data %>% 
+  arrange(desc(CumTests)) %>% 
+  head(n=10)
+
+# Print out result
+#View top 10 countries worldwide with highest current active cases (Active)
+top10activeW %>%  
+  select(Country, Active) %>% 
+  pander()
+#View top 10 countries worldwide with highest total confirmed cases (CumCases)
+top10casesW %>%  
+  select(Country, CumCases) %>% 
+  pander()
+#View top 10 countries worldwide with highest fatality rate (FatalityRate)
+top10fatalityW %>% 
+  select(Country, FatalityRate) %>% 
+  pander()
+#View top 10 countries worldwide with highest total cumulative test (CumTests)
+top10testsMW %>% 
+  select(Country, CumTests) %>% 
+  pander()
+
+
+
+#8. Based on the last day data, print the up to date confirmed, death, recovered cases as well as the tests for every continent.
+lastDay_ByContinent <- lastDay_data %>% 
+  arrange(Continent) %>% 
+  group_by(Continent) %>% 
+  select(Continent, CumCases, CumDeaths, CumRecovered, CumTests) %>% 
+  dplyr::summarise(Total_ConfirmedCases = sum(CumCases), 
+                   Total_ConfirmedDeath = sum(CumDeaths), 
+                   Total_Recovered = sum(CumRecovered), 
+                   Total_ConfirmedTest = sum(CumTests)) 
+
+lastDay_ByContinent
+
+#9. Build a graph to show the total number of cases over the time for the top 10 countries that have been obtained in question 7 
+##  (Use log for Y axis for better presentation).
+
+top_10_countries_cumCases <-levels( factor( top10casesW$Country )) # get the name of 10 countries with most active cases
+
+df_master %>% 
+  filter(Country %in% top_10_countries_cumCases) %>% ## Filter to get only data with 10 countries
+  arrange(Country, Date) %>%  # Arrange by country, date then group by country
+  group_by(Country) %>% 
+  ggplot2::ggplot(aes(x = Date, y = CumCases, color = Country)) +
+  geom_line(size = 2)+
+  labs(color = 'Type', subtitle = "From 2/2020 to 5/2020") +
+  ylab("Number of cases") +
+  xlab("Date") +
+  ggtitle("Total number of cases over the time for the top 10 countries from q7")+
+  theme(legend.position="right")+
+  scale_x_date( date_labels = "%b")+
+  scale_y_continuous(trans = 'log10')
+
+#10.Build a graph for the top 10 countries with current highest active cases which was obtained previously in question 7
+##  The graph should have one subgraph (i.e. using facet function) for each of these countries, 
+##  every subgraph should show how the new cases, new deaths, and new recovered cases were changing over time
+##  Use log for Y axis for better presentation, Use different colour to distinguish between new cases, deaths, and recovered).
+##  [hint: geom_line function with date on x_axis and each of the values of the variables in y_axis]
+
+top_10_countries_active <-levels( factor( top10activeW$Country )) # get the name of 10 countries with most active cases
+
+df_master %>% 
+  filter(Country %in% top_10_countries_active) %>% ## Filter to get only data with 10 countries
+  arrange(Country, Date) %>%  # Arrange by country, date then group by country
+  group_by(Country) %>% 
+  ggplot2::ggplot(aes(x = Date, y = CumCases, color = Country)) +
+  geom_line(mapping = aes(y = NewCases , color = "Cases"), size = 2) +
+  geom_line(mapping = aes(y = NewDeaths , color = "Death"), size = 2) +
+  geom_line(mapping = aes(y = Recovered , color = "Recovered"), size = 2) +
+  scale_color_manual(values = c(
+    'Cases' = 'Blue',
+    'Death' = 'Red',
+    'Recovered' = 'Green')) +
+  labs(color = 'Type', subtitle = "New Cases, New Deaths and Recovered Changed Over time") +
+  ylab("Number of cases") +
+  xlab("Date") +
+  ggtitle("Top 10 countries with most active cases")+
+  theme(legend.position="right")+
+  scale_x_date( date_labels = "%b")+
+  scale_y_continuous(trans = 'log10')+
+  facet_wrap(~Country, nrow = 2) 
+
+  
+# Part 3: Data-Driven Modelling
+#1. Based on the data of the last day, that you have extracted in the previous task,
+##  create a separate dataframe named "cor_data" with the data 
+##  of these variables (CumCases, CumTests, Population, GDP, GDPCapita).
+##  [Hint: you can use select function on the lastday_data dataframe]
+cor_data <- lastDay_data %>% 
+  select(Country, CumCases, CumTests, Population, GDP, GDPCapita)
+
+cor_data
+
+#2. Compute the correlation matrix between the variables of the "cor_data" and visualise this correlation matrix.
+correlation_matrix <- cor(cor_data[, 2:6])
+
+correlation_matrix 
+
+ggcorr(correlation_matrix, label = TRUE, label_alpha = TRUE)
+
+
+#3. Divide the cor_data into training and testing, where training data represent 65% of the number of rows.
+set.seed(123)
+data <- sample(c(TRUE, FALSE), nrow(cor_data), replace = T, prob = c(0.65,0.35))
+train <- cor_data[data, ]
+test <- cor_data[!data, ]
+
+dim(train) #roughly 67%
+
+dim(test) #roughly 32%
+
+  
+#4. Train a linear regression model to predict cumulative cases from the GDP of the countries.
+##  Then, evaluate this model on the test data and print the root mean square error value.
+lm_model_01 <- lm(CumCases ~ GDP, data = train) # Train model using "train" data.
+
+print(lm_model_01)
+
+summary(lm_model_01)
+
+# predicting
+test$Predicted_CumCases_01 <- predict(lm_model_01, test) 
+
+test %>% 
+  select(Country, CumCases, Predicted_CumCases_01) %>% 
+  pander()
+
+#compute the root mean square error (RMSE)
+preds <- test$Predicted_CumCases_01
+actual <- test$CumCases
+
+RMSE(preds, actual) # RMSE
+
+#5. Train another linear regression model to predict cumulative cases from all the other variables
+##  Then, evaluate this model on the test data and print the root mean square error value.
+
+lm_model_02 <- lm(CumCases ~ ., data = train[,2:6], na.action = na.pass) # Train LM Model
+
+print(lm_model_02)
+
+summary(lm_model_02)
+
+# predicting 
+test$Predicted_CumCases_02 <- predict(lm_model_02, test[,2:6])
+
+test %>% 
+  select(Country, CumCases,Predicted_CumCases_01, Predicted_CumCases_02) %>% 
+  pander()
+
+#compute the root mean square error (RMSE)
+preds_02 <- test$Predicted_CumCases_02
+actual_02 <- test$CumCases
+
+RMSE(preds_02, actual_02) # RMSE 
+
